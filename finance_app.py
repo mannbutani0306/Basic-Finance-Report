@@ -6,129 +6,124 @@ import os
 
 st.title("📊 Finance Report Generator")
 
-# Company details input (always visible)
+# Company details input
 st.header("Company Details")
 company_name = st.text_input("Enter Company's Name")
 n = st.number_input("Enter number of products", min_value=1, step=1)
 FC = st.number_input("Enter total fixed cost", min_value=0)
 
-# Initialize session state for report generation
+# Initialize session state
 if "report_generated" not in st.session_state:
     st.session_state.report_generated = False
 if "pdf_bytes" not in st.session_state:
     st.session_state.pdf_bytes = None
 
 if company_name and n:
-    # Group remaining inputs into a form so that data is submitted all at once
     with st.form("finance_form"):
         st.subheader("Enter Product Details")
-        Names = []
-        Sales = []
-        VC = []
-        # Loop dynamically based on number of products
+        Names, Sales, VC = [], [], []
         for i in range(int(n)):
             st.markdown(f"**Product {i+1} Details**")
-            # Use unique keys per input widget to preserve state
-            prod_name = st.text_input(f"Name of product {i+1}", key=f"name_{i}")
-            prod_sales = st.number_input(f"Selling price of product {i+1}", min_value=0, key=f"sales_{i}")
-            prod_vc = st.number_input(f"Variable cost of product {i+1}", min_value=0, key=f"vc_{i}")
-            Names.append(prod_name)
-            Sales.append(prod_sales)
-            VC.append(prod_vc)
+            name = st.text_input(f"Product {i+1} Name", key=f"name_{i}")
+            sale = st.number_input(f"Selling Price of {name}", min_value=0, key=f"sale_{i}")
+            vc = st.number_input(f"Variable Cost of {name}", min_value=0, key=f"vc_{i}")
+            Names.append(name)
+            Sales.append(sale)
+            VC.append(vc)
 
         st.subheader("Supplier Evaluation")
-        standard_price = st.number_input("Enter standard material price", min_value=0, key="std_price")
-        actual_price = st.number_input("Enter actual material price", min_value=0, key="act_price")
-        actual_quantity = st.number_input("Enter actual quantity purchased", min_value=0, key="act_qty")
+        standard_price = st.number_input("Standard Material Price", min_value=0)
+        actual_price = st.number_input("Actual Material Price", min_value=0)
+        actual_quantity = st.number_input("Actual Quantity Purchased", min_value=0)
 
-        # Submit button for the form
         submit = st.form_submit_button("Generate Report")
 
     if submit:
-        # Create a DataFrame from product details
-        company_data = pd.DataFrame({"Name": Names, "Sales": Sales, "VC": VC})
-        company_data["Contribution"] = company_data["Sales"] - company_data["VC"]
-        # Calculate PV ratio safely
-        company_data["PV_ratio/unit"] = company_data.apply(
-            lambda row: ((row["Sales"] - row["VC"]) / row["Sales"] * 100)
-            if row["Sales"] > 0 else 0,
-            axis=1
-        )
+        df = pd.DataFrame({"Name": Names, "Sales": Sales, "VC": VC})
+        df["Contribution"] = df["Sales"] - df["VC"]
+        df["PV_ratio/unit"] = df.apply(lambda row: ((row["Sales"] - row["VC"]) / row["Sales"]) * 100 if row["Sales"] > 0 else 0, axis=1)
 
-        # Calculate overall metrics
-        Total_sales = company_data["Sales"].sum()
-        Total_vc = company_data["VC"].sum()
+        Total_sales = df["Sales"].sum()
+        Total_vc = df["VC"].sum()
         PV_ratio = ((Total_sales - Total_vc) / Total_sales) * 100 if Total_sales > 0 else 0
         BEP = FC / (PV_ratio / 100) if PV_ratio > 0 else 0
         net_profit = Total_sales - (FC + Total_vc)
 
-        # Display the bar chart for product PV ratios
-        st.subheader("📈 Product PV Ratios")
+        # Store values in session
+        st.session_state.df = df
+        st.session_state.company_name = company_name
+        st.session_state.FC = FC
+        st.session_state.Total_sales = Total_sales
+        st.session_state.net_profit = net_profit
+        st.session_state.BEP = BEP
+        st.session_state.stop_production = df[df["Contribution"] <= 0]["Name"].tolist()
+        st.session_state.max_contributor = df.loc[df["PV_ratio/unit"].idxmax()]["Name"]
+        st.session_state.min_contributor = df.loc[df["PV_ratio/unit"].idxmin()]["Name"]
+        st.session_state.mpv = (standard_price - actual_price) * actual_quantity
+        st.session_state.mpv_msg = (
+            "It is favourable. The price of material you are buying is good w.r.t. the market price"
+            if st.session_state.mpv >= 0
+            else "It is unfavourable. This means the company needs to change the supplier or need to make materials instead of buying"
+        )
+
+        # Save chart
         fig, ax = plt.subplots()
-        ax.bar(company_data["Name"], company_data["PV_ratio/unit"], color='red')
+        ax.bar(df["Name"], df["PV_ratio/unit"], color='red')
+        ax.set_title("Product Name vs PV ratio / unit")
         ax.set_xlabel("Product Name")
-        ax.set_ylabel("PV Ratio per Unit (%)")
-        ax.set_title("Product PV Ratio Comparison")
+        ax.set_ylabel("PV ratio / unit")
+        chart_file = "pvratio_bar_chart.png"
+        fig.savefig(chart_file)
         st.pyplot(fig)
 
-        # Display summary information
-        st.subheader("💼 Summary")
-        st.write(f"**Company Name:** {company_name}")
-        st.write(f"**Fixed Cost:** Rs. {FC}")
-        st.write(f"**Total Sales:** Rs. {Total_sales}")
-        st.write(f"**Net Profit:** Rs. {net_profit}")
-        st.write(f"**Break Even Point:** Rs. {round(BEP, 2)}")
-
-        # Check for products with non-positive contribution
-        stop_production = company_data[company_data["Contribution"] <= 0]["Name"].tolist()
-        st.subheader("🛑 Products with Non-Positive Contribution")
-        if stop_production:
-            st.warning(f"Stop production of these products: {', '.join(stop_production)}")
-        else:
-            st.success("All products are profitable. No need to stop production.")
-
-        st.subheader("📦 Supplier Evaluation")
-        mpv = (standard_price - actual_price) * actual_quantity
-        st.write(f"**Material Price Variance:** Rs. {mpv}")
-        if mpv < 0:
-            st.error("Unfavourable variance: consider changing suppliers or reviewing material costs.")
-        else:
-            st.success("Favourable variance: supplier pricing is good.")
-
-        # --- Generate PDF and store in session state ---
+        # Generate PDF with matching structure
         pdf = FPDF()
         pdf.add_page()
-        pdf.set_font("Arial", "B", 16)
-        pdf.cell(0, 10, "Finance Report", ln=1, align="C")
-        pdf.ln(5)
+        pdf.set_font("Arial", "B", 18)
+        pdf.cell(200, 10, txt="Finance Report", ln=True, align='C')
+
         pdf.set_font("Arial", size=12)
-        pdf.cell(0, 10, f"Company Name: {company_name}", ln=1)
-        pdf.cell(0, 10, f"Fixed Cost: Rs. {FC}", ln=1)
-        pdf.cell(0, 10, f"Total Sales: Rs. {Total_sales}", ln=1)
-        pdf.cell(0, 10, f"Net Profit: Rs. {net_profit}", ln=1)
-        pdf.cell(0, 10, f"Break Even Point: Rs. {round(BEP, 2)}", ln=1)
         pdf.ln(5)
+        pdf.multi_cell(0, 10, "Company's Details :-")
+        pdf.multi_cell(0, 10, f"Company Name : {company_name}")
+        pdf.multi_cell(0, 10, f"Total number of Products : {int(n)}")
+        pdf.multi_cell(0, 10, f"Fixed Cost : {FC}")
+        pdf.multi_cell(0, 10, f"Total Sales : {Total_sales}")
+        pdf.multi_cell(0, 10, f"Net Profit : {net_profit}")
+        pdf.multi_cell(0, 10, " ")
 
-        # Save the bar chart to a temporary file
-        chart_filename = "temp_chart.png"
-        fig.savefig(chart_filename)
-        pdf.cell(0, 10, "Product PV Ratio Comparison:", ln=1)
-        pdf.image(chart_filename, x=10, w=pdf.w - 20)
-        pdf.ln(5)
+        pdf.multi_cell(0, 10, "Need to stop production of any product ?")
+        if st.session_state.stop_production:
+            products_str = ", ".join(st.session_state.stop_production)
+            pdf.multi_cell(0, 10, f"Since Contribution<=0 for this products list {products_str}, the company need to immediately stop the production of this, because it is indirectly creating loss.")
+        else:
+            pdf.multi_cell(0, 10, "Every product is running in profit. No need to stop production of any product.")
+        pdf.multi_cell(0, 10, " ")
 
-        pdf.cell(0, 10, f"Material Price Variance: Rs. {mpv}", ln=1)
+        pdf.multi_cell(0, 10, "Product Contribution in making profit :-")
+        pdf.multi_cell(0, 10, "Here is a bar graph comparing PV ratio of every product -----")
+        pdf.image(chart_file, w=190)
+        pdf.multi_cell(0, 10, f"This graph indicates that {st.session_state.max_contributor} is the highest contributer in the company's overall profit.")
+        pdf.multi_cell(0, 10, f"And {st.session_state.min_contributor} is the least contributer in the company's overall profit.")
+        pdf.multi_cell(0, 10, " ")
 
-        # Output the PDF as a byte string using Latin-1 encoding
+        pdf.multi_cell(0, 10, "Break Even Point :-")
+        pdf.multi_cell(0, 10, f"BEP = Rs.{st.session_state.BEP}")
+        pdf.multi_cell(0, 10, "It is amount where the comapny covers its cost and can generate profit after selling every product.")
+        pdf.multi_cell(0, 10, " ")
+
+        pdf.multi_cell(0, 10, "Is your supplier beneficial for the company ?")
+        pdf.multi_cell(0, 10, f"Material price variance = {st.session_state.mpv}")
+        pdf.multi_cell(0, 10, st.session_state.mpv_msg)
+
         pdf_bytes = pdf.output(dest="S").encode("latin1")
         st.session_state.pdf_bytes = pdf_bytes
         st.session_state.report_generated = True
 
-        # Clean up the temporary chart image file
-        if os.path.exists(chart_filename):
-            os.remove(chart_filename)
+        if os.path.exists(chart_file):
+            os.remove(chart_file)
 
-# Provide the "Export to PDF" download button if report is generated
-if st.session_state.report_generated and st.session_state.pdf_bytes is not None:
+if st.session_state.report_generated and st.session_state.pdf_bytes:
     st.download_button(
         label="Download PDF Report",
         data=st.session_state.pdf_bytes,
